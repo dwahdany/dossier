@@ -1,0 +1,25 @@
+.build/
+.build-*/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+.DS_Store
+# Snapshots contain personal data and must never be committed.
+*.png
+snapshots/
+*.csv
+build/
+report.json
+dossier-uitest/
+*.tsv
+*.log
+*.jpg
+*.jpeg
+*.heic
+*.db
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.kgdb
+*.segb
+*.dmg
