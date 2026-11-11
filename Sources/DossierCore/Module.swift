@@ -173,6 +173,13 @@ public struct SearchHit: Identifiable, Sendable, Hashable {
         self.title = title; self.subtitle = subtitle; self.moduleID = moduleID
         self.sectionID = sectionID; self.payload = payload; self.symbol = symbol; self.sensitivity = sensitivity
     }
+
+    /// Hits without the ones that read exactly like an earlier hit in the same section
+    /// (same title and subtitle: two stored copies of one snippet). The first one stays.
+    public static func distinct(_ hits: [SearchHit]) -> [SearchHit] {
+        var seen = Set<[String]>()
+        return hits.filter { seen.insert([$0.sectionID, $0.title, $0.subtitle]).inserted }
+    }
 }
 
 /// One line of `--selftest` output.

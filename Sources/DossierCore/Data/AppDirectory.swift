@@ -130,6 +130,14 @@ public enum AppDirectory {
         "org.whispersystems.signal": "Signal",
         "ph.telegra.Telegraph": "Telegram",
         "us.zoom.videomeetings": "Zoom",
+        // Widespread third-party Mac apps whose identifiers do not prettify into their name
+        "com.tinyspeck.slackmacgap": "Slack",
+        "us.zoom.xos": "Zoom",
+        "notion.id": "Notion",
+        "com.microsoft.VSCode": "Visual Studio Code",
+        "com.google.Maps": "Google Maps",
+        "com.figma.Desktop": "Figma",
+        "com.spotify.client": "Spotify",
     ]
 
     /// Display name for a bundle identifier; `unknown` for an empty identifier.
@@ -154,7 +162,10 @@ public enum AppDirectory {
         lock.lock()
         if let hit = urlCache[bundle] { lock.unlock(); return hit }
         lock.unlock()
-        let url = bundle.isEmpty ? nil : NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+        var url = bundle.isEmpty ? nil : NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle)
+        // Demo mode must not show which apps this Mac's owner has installed: only apps
+        // that ship with macOS itself (identical on every Mac) resolve to a name and icon.
+        if Paths.isDemo, let found = url, !(found.path.hasPrefix("/System/") || found.path == "/Applications/Safari.app") { url = nil }
         lock.lock(); urlCache[bundle] = .some(url); lock.unlock()
         return url
     }

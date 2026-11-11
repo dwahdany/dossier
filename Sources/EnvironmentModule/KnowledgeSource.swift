@@ -190,7 +190,7 @@ enum KnowledgeSource {
         if hasState, let n = try? await db.scalar("SELECT count(*) FROM ZOBJECT WHERE ZSTREAMNAME = '/bluetooth/isConnected' AND ZVALUEINTEGER = 0") {
             notConnected = Int(n.int ?? 0)
         }
-        let cols = await db.columnNames(of: "ZSTRUCTUREDMETADATA")
+        let cols = await db.columnSet(of: "ZSTRUCTUREDMETADATA")
         func col(_ name: String) -> String { cols.contains(name) ? "m.\(name)" : "NULL" }
         let models = await deviceLabels(db)
         let sql = """
@@ -243,7 +243,7 @@ enum KnowledgeSource {
 
     static func peers() async -> [KnowledgePeer] {
         guard let db = await db(), await db.hasColumns("ZSYNCPEER", ["ZDEVICEID", "ZMODEL"]) else { return [] }
-        let cols = await db.columnNames(of: "ZSYNCPEER")
+        let cols = await db.columnSet(of: "ZSYNCPEER")
         func col(_ name: String) -> String { cols.contains(name) ? name : "NULL" }
         var peers: [String: KnowledgePeer] = [:]
         var order: [String] = []

@@ -37,6 +37,8 @@ enum PhotosLibraryLocator {
 
     /// The library all sections currently read.
     static func current() -> PhotosLibrary? {
+        // Demo mode: only the library below the demo root, never an override or a remembered path.
+        if Paths.isDemo { return systemLibrary() }
         if let forced = ProcessInfo.processInfo.environment["DOSSIER_PHOTOS_LIBRARY"], !forced.isEmpty {
             return PhotosLibrary(root: URL(fileURLWithPath: (forced as NSString).expandingTildeInPath, isDirectory: true))
         }
@@ -52,7 +54,7 @@ enum PhotosLibraryLocator {
         let prefs = Paths.library.appendingPathComponent("Containers/com.apple.photolibraryd/Data/Library/Preferences/com.apple.photolibraryd.plist")
         if let data = try? Data(contentsOf: prefs),
            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-           let path = plist["SystemLibraryPath"] as? String, FileManager.default.fileExists(atPath: path) {
+           let path = plist["SystemLibraryPath"] as? String, Paths.allows(path: path), FileManager.default.fileExists(atPath: path) {
             return PhotosLibrary(root: URL(fileURLWithPath: path, isDirectory: true))
         }
         return Paths.photosLibrary.map { PhotosLibrary(root: $0) }
@@ -103,7 +105,9 @@ final class PhotosLibrarySelection: ObservableObject {
     @Published private(set) var candidates: [PhotosLibrary] = PhotosLibraryLocator.candidates()
 
     func select(_ library: PhotosLibrary?) {
-        if let library, library != PhotosLibraryLocator.systemLibrary() {
+        if Paths.isDemo {
+            // Nothing is remembered in demo mode: a demo path must not leak into a real run.
+        } else if let library, library != PhotosLibraryLocator.systemLibrary() {
             UserDefaults.standard.set(library.root.path, forKey: PhotosLibraryLocator.defaultsKey)
         } else {
             UserDefaults.standard.removeObject(forKey: PhotosLibraryLocator.defaultsKey)

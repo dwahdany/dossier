@@ -93,6 +93,29 @@ public struct TagLabel: View {
     }
 }
 
+/// "Demo data" marker, visible only in demo mode (`DOSSIER_DEMO_ROOT`): the shells put it
+/// in the sidebar footer and in the snapshot title strip, so that a screenshot of the
+/// synthetic data set says what it is. Renders nothing otherwise.
+public struct DemoBadge: View {
+    public init() {}
+
+    public var body: some View {
+        if Paths.isDemo {
+            Label("Demo data", systemImage: "theatermasks")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2.weight(.medium))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .foregroundStyle(.secondary)
+                .background(Color.secondary.opacity(0.13), in: Capsule())
+                .lineLimit(1)
+                .fixedSize()
+                .help("Showing an invented data set, not this Mac's stores")
+                .accessibilityLabel("Demo data: an invented data set, not this Mac's stores")
+        }
+    }
+}
+
 // MARK: - Page scaffolds
 
 /// A vertically scrolling page with standard padding and block spacing — the root of
@@ -488,6 +511,16 @@ public struct KeyValueGrid: View {
         self.items = items; self.labelWidth = labelWidth; self.lineLimit = valueLineLimit
     }
 
+    /// Addresses, URLs and identifiers must wrap without an inserted hyphen
+    /// ("exam-ple.com" reads as a different address): such values are marked as being in
+    /// no language, which switches hyphenation off. The characters stay as they are, so
+    /// selecting and copying gives the exact value.
+    static func display(_ value: String) -> AttributedString {
+        var text = AttributedString(value)
+        if value.contains("@") || value.contains("://") || !value.contains(" ") { text.languageIdentifier = "zxx" }
+        return text
+    }
+
     public var body: some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
             ForEach(items) { item in
@@ -498,7 +531,7 @@ public struct KeyValueGrid: View {
                         .frame(width: labelWidth, alignment: .trailing)
                         .gridColumnAlignment(.trailing)
                         .lineLimit(2)
-                    Text(item.value)
+                    Text(KeyValueGrid.display(item.value))
                         .font(item.monospaced ? .callout.monospaced() : .callout)
                         .textSelection(.enabled)
                         .lineLimit(lineLimit)
@@ -766,7 +799,7 @@ public struct InspectorPage<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title).font(.headline).lineLimit(1).truncationMode(.middle)
+                    Text(title).font(.headline).lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
                     if let subtitle {
                         Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     }

@@ -6,6 +6,9 @@ DerivedData/
 .DS_Store
 # Snapshots contain personal data and must never be committed.
 *.png
+# The one exception: README pictures, rendered from generated demo data only
+# (scripts/make-screenshots.sh).
+!docs/images/*.png
 snapshots/
 *.csv
 build/

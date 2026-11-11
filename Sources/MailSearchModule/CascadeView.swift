@@ -196,8 +196,10 @@ private struct CascadeSetPane: View {
         case .mail:
             return [
                 PagedColumn("Date", id: "date", width: 150, min: 130, sortable: indexed) { DossierDate.sortable($0.date) },
+                // Subject before sender: a message and its attachment files share date and
+                // sender, so in a narrow pane only the subject / file name tells them apart.
+                PagedColumn("Subject / File", id: "subject", width: 290, min: 160, sortable: false, sensitivity: level) { $0.title },
                 PagedColumn("From", id: "from", width: 250, min: 120, sortable: false, sensitivity: level) { $0.subtitle },
-                PagedColumn("Subject / File", id: "subject", width: 400, min: 160, sortable: false, sensitivity: level) { $0.title },
                 PagedColumn("Kind", id: "kind", width: 110, sortable: false, secondary: true) { row in
                     var kind = row.type
                     if kind.hasSuffix("Entity") { kind.removeLast(6) }

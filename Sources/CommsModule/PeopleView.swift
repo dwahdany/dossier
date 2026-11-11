@@ -160,7 +160,7 @@ struct HourBars: View {
         var hours = [Double](repeating: 0, count: 24)
         for bin in heat where (0..<24).contains(bin.hour) { hours[bin.hour] += bin.weight }
         return Chart(Array(hours.enumerated()), id: \.offset) { hour, value in
-            BarMark(x: .value("Hour", hour), y: .value("Interactions", value), width: .ratio(0.8))
+            BarMark(x: .value("Hour", hour), y: .value("Interactions", value), width: .fixed(7))
                 .foregroundStyle(Color.blue.gradient)
                 .cornerRadius(2)
         }

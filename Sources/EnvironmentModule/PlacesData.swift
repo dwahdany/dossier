@@ -111,7 +111,12 @@ enum PlacesLoader {
         places += await mapsDestinations()
         places += await activityLocations()
         places += await microLabels()
-        places.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+        // What the map shows comes first: places stored with a coordinate, then the
+        // address-only ones; most recently used first within each.
+        places.sort {
+            if $0.hasCoordinate != $1.hasCoordinate { return $0.hasCoordinate }
+            return ($0.date ?? .distantPast) > ($1.date ?? .distantPast)
+        }
         data.places = places
         for p in places { data.counts[p.kind, default: 0] += 1 }
         data.streams = streamStatuses()
@@ -248,7 +253,7 @@ enum PlacesLoader {
     // knowledgeC structured metadata with coordinates (app activity / location streams).
     static func activityLocations() async -> [Place] {
         guard let db = await KnowledgeSource.db() else { return [] }
-        let cols = await db.columnNames(of: "ZSTRUCTUREDMETADATA")
+        let cols = await db.columnSet(of: "ZSTRUCTUREDMETADATA")
         let lat = "Z_DKLOCATIONAPPLICATIONACTIVITYMETADATAKEY__LATITUDE", lon = "Z_DKLOCATIONAPPLICATIONACTIVITYMETADATAKEY__LONGITUDE"
         guard cols.contains(lat), cols.contains(lon) else { return [] }
         func col(_ name: String) -> String { cols.contains(name) ? "m.\(name)" : "NULL" }

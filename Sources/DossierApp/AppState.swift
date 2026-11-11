@@ -6,12 +6,17 @@ import DossierCore
 final class AppState: ObservableObject {
     static let overviewID = "overview"
 
+    /// Where UI preferences are kept: the app's own user defaults, or a separate domain
+    /// in demo mode, so a demo run neither shows nor changes the real app's last section,
+    /// Privacy Mode or sidebar state.
+    static let preferences: UserDefaults = Paths.isDemo ? (UserDefaults(suiteName: "dev.dossier.viewer.demo") ?? .standard) : .standard
+
     let modules: [any DossierModule] = ModuleRegistry.modules
 
     /// Selected sidebar item: `"overview"` or a section id.
     @Published var selection: String? {
         didSet {
-            if persists, let selection { UserDefaults.standard.set(selection, forKey: "lastSection") }
+            if persists, let selection { AppState.preferences.set(selection, forKey: "lastSection") }
             recordHistory(old: oldValue)
             // A deep link is consumed by its target section; leaving for another section
             // drops it so a later revisit does not replay a stale navigation.
@@ -19,7 +24,7 @@ final class AppState: ObservableObject {
         }
     }
     @Published var privacyMode: Bool {
-        didSet { if persists { UserDefaults.standard.set(privacyMode, forKey: "privacyMode") } }
+        didSet { if persists { AppState.preferences.set(privacyMode, forKey: "privacyMode") } }
     }
     @Published var refreshToken = 0
     private var persists = true
@@ -65,9 +70,9 @@ final class AppState: ObservableObject {
     func select(_ id: String) {
         if persists, let module = section(id)?.module {
             let key = "collapsedModules"
-            var collapsed = Set((UserDefaults.standard.string(forKey: key) ?? "").split(separator: ",").map(String.init))
+            var collapsed = Set((AppState.preferences.string(forKey: key) ?? "").split(separator: ",").map(String.init))
             if collapsed.remove(module.id) != nil {
-                UserDefaults.standard.set(collapsed.sorted().joined(separator: ","), forKey: key)
+                AppState.preferences.set(collapsed.sorted().joined(separator: ","), forKey: key)
             }
         }
         selection = id
@@ -79,7 +84,7 @@ final class AppState: ObservableObject {
     @Published var permissionDismissed = false
 
     init() {
-        let defaults = UserDefaults.standard
+        let defaults = AppState.preferences
         defaults.register(defaults: ["restoreLastSection": true, "privacyOnLaunch": false])
         privacyMode = defaults.bool(forKey: "privacyOnLaunch") || defaults.bool(forKey: "privacyMode")
         let last = defaults.string(forKey: "lastSection")
@@ -110,6 +115,8 @@ final class AppState: ObservableObject {
         state.selection = AppState.overviewID
         state.privacyMode = false
         state.backStack = []
+        // `--screenshot` of the permission screen (as `--snapshot app` does).
+        if ProcessInfo.processInfo.environment["DOSSIER_SNAPSHOT_NO_FDA"] != nil { state.hasFullDiskAccess = false; state.accessOverridden = true }
         return state
     }
 

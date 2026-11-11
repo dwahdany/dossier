@@ -186,4 +186,22 @@ public enum LZFSE {
             capacity = min(capacity * 4, limit)
         }
     }
+
+    /// An LZFSE stream that stores `data` uncompressed (`bvx-` block + `bvx$` end marker):
+    /// the form the demo-data generators write, since they have no LZFSE encoder.
+    public static func stored(_ data: Data) -> Data {
+        var out = Data([0x62, 0x76, 0x78, 0x2D])
+        withUnsafeBytes(of: UInt32(data.count).littleEndian) { out.append(contentsOf: $0) }
+        out.append(data)
+        out.append(contentsOf: [0x62, 0x76, 0x78, 0x24])
+        return out
+    }
+
+    /// Self-test: the system decoder reads a stored-block stream like a compressed one.
+    public static func selfTest() -> [SelfTestLine] {
+        let sample = Data((0..<4_000).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
+        let decoded = decode(stored(sample))
+        return [.check("LZFSE: uncompressed-block stream decodes", decoded == sample,
+                       decoded == sample ? "\(sample.count) bytes round-trip through bvx- / bvx$ framing" : "decoder returned \(decoded?.count ?? -1) bytes")]
+    }
 }

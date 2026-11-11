@@ -22,6 +22,10 @@ import AppKit
 ///          [--screen WxH]
 ///                                          real-window UI test: layout invariants at each
 ///                                          size, synthesized input, PNGs + report.json
+/// --screenshot <sectionID|moduleID|overview> <out.png> [--dark] [--size WxH] [--scale 1|2]
+///          [--payload <p>] [--query <text>] [--select-row n] [--privacy] [--wait seconds] [--linger seconds]
+///                                          one picture of the real window shell (title bar,
+///                                          toolbar, sidebar) showing that section
 /// (no flags)                               start the GUI
 /// ```
 @MainActor
@@ -52,6 +56,9 @@ public enum DossierRunner {
         uiTestShell: (@MainActor () -> UITestShell)?
     ) -> Never {
         let args = Array(CommandLine.arguments.dropFirst())
+        // Demo mode (DOSSIER_DEMO_ROOT): make the real stores unreadable for this process
+        // before anything is read. Does nothing otherwise.
+        DemoGuard.activate()
 
         func value(after flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
@@ -88,7 +95,7 @@ public enum DossierRunner {
                 var timings: [(String, Double)] = []
                 // Core guarantee every module relies on: reading never touches a store's files.
                 print("== core — DossierCore")
-                for line in await SQLiteDB.sidecarSelfTest() + layoutLines {
+                for line in DemoGuard.selfTestSetup() + (await SQLiteDB.sidecarSelfTest()) + LZFSE.selfTest() + layoutLines {
                     if line.status == .fail { failures += 1 }
                     print("  [\(line.status.rawValue)] \(line.label)\(line.detail.isEmpty ? "" : " — " + line.detail)")
                 }
@@ -129,6 +136,15 @@ public enum DossierRunner {
                 if summaryTotal > limit { failures += 1 }
                 print(String(format: "  [%@] all summaries, concurrently — %.2fs (limit %.0fs); self-tests %.2fs in total",
                              status, summaryTotal, limit, timings.reduce(0) { $0 + $1.1 }))
+                // Demo mode: after everything has been read, nothing outside the root was touched.
+                let audit = DemoGuard.selfTestAudit()
+                if !audit.isEmpty {
+                    print("== demo — audit of what was read")
+                    for line in audit {
+                        if line.status == .fail { failures += 1 }
+                        print("  [\(line.status.rawValue)] \(line.label)\(line.detail.isEmpty ? "" : " — " + line.detail)")
+                    }
+                }
                 print(failures == 0 ? "Self-test OK" : "Self-test: \(failures) failure(s)")
                 exit(failures == 0 ? 0 : 1)
             }
@@ -144,7 +160,7 @@ public enum DossierRunner {
                     let summary = await module.summary()
                     print(String(format: "== %@ — %@ (%.2fs)", module.id, module.title, Date().timeIntervalSince(started)))
                     for store in summary.stores {
-                        print("  store: \(store.name) | \(store.availability.label) | \(Format.bytes(store.sizeBytes)) | rows \(Format.count(store.rowCount)) | \(DossierDate.range(store.timeRange))")
+                        print("  store: \(store.name) | \(Format.tildePath(store.path)) | \(store.availability.label) | \(Format.bytes(store.sizeBytes)) | rows \(Format.count(store.rowCount)) | \(DossierDate.range(store.timeRange))")
                     }
                     for fact in summary.facts {
                         print("  fact [\(fact.sensitivity.label)]: \(fact.label) = \(fact.value)")
@@ -167,7 +183,7 @@ public enum DossierRunner {
                     for (index, module) in selected.enumerated() {
                         group.addTask {
                             let t0 = Date()
-                            let hits = await module.search(query, limit: 25)
+                            let hits = SearchHit.distinct(await module.search(query, limit: 25))
                             return (index, hits, Date().timeIntervalSince(t0))
                         }
                     }
@@ -193,6 +209,7 @@ public enum DossierRunner {
         }
 
         if args.contains("--snapshot") {
+            DemoGuard.requireSandboxForRendering()
             let parts = positionals(after: "--snapshot")
             guard parts.count >= 2 else { fputs(usage, stderr); exit(2) }
             var options = SnapshotOptions()
@@ -221,7 +238,33 @@ public enum DossierRunner {
             exit(ok ? 0 : 1)
         }
 
+        if args.contains("--screenshot") {
+            DemoGuard.requireSandboxForRendering()
+            let parts = positionals(after: "--screenshot")
+            guard parts.count >= 2 else { fputs(usage, stderr); exit(2) }
+            var request = ScreenshotRequest()
+            request.target = parts[0]
+            request.out = URL(fileURLWithPath: parts[1])
+            request.dark = args.contains("--dark")
+            request.privacy = args.contains("--privacy")
+            request.payload = value(after: "--payload")
+            request.search = value(after: "--query")
+            // Selects row n of every table after its first load, so an inspector is open.
+            if let row = value(after: "--select-row"), Int(row) != nil { setenv("DOSSIER_SNAPSHOT_SELECT_ROW", row, 1) }
+            if let wait = value(after: "--wait").flatMap(Double.init) { request.timeout = wait }
+            if let linger = value(after: "--linger").flatMap(Double.init) { request.linger = linger }
+            if let scale = value(after: "--scale").flatMap(Double.init), scale >= 1, scale <= 3 { request.scale = CGFloat(scale) }
+            if let size = value(after: "--size") {
+                let wh = size.lowercased().split(separator: "x").compactMap { Double($0) }
+                guard wh.count == 2, wh[0] >= 600, wh[1] >= 400 else { fputs("--size expects WxH\n", stderr); exit(2) }
+                request.size = CGSize(width: wh[0], height: wh[1])
+            }
+            let shell = uiTestShell?() ?? DevShellUITest(modules: modules)
+            UITestRunner.screenshot(shell: shell, request: request)
+        }
+
         if args.contains("--uitest") {
+            DemoGuard.requireSandboxForRendering()
             var options = UITestOptions()
             options.target = positionals(after: "--uitest").first ?? "all"
             if let out = value(after: "--out") { options.outDir = URL(fileURLWithPath: out) }
@@ -247,6 +290,8 @@ public enum DossierRunner {
             UITestRunner.run(shell: shell, options: options)
         }
 
+        // The GUI: in demo mode only with the sandbox on (see DemoGuard).
+        DemoGuard.requireSandboxForRendering()
         if let launchApp {
             launchApp()
         } else {
@@ -265,6 +310,8 @@ public enum DossierRunner {
       --snapshot <moduleID|sectionID> <out.png> [--dark] [--size WxH] [--wait seconds] [--privacy] [--payload <p>] [--scale 1|2]
       --uitest [sectionID|moduleID|all] [--out <dir>] [--sizes WxH,WxH,...] [--query <text>] [--no-interactions] [--wait seconds]
                [--payload <p>] [--dark] [--screen WxH]
+      --screenshot <sectionID|moduleID|overview> <out.png> [--dark] [--size WxH] [--scale 1|2] [--payload <p>] [--query <text>]
+               [--select-row n] [--privacy] [--wait seconds] [--linger seconds]
       (no arguments: start the app)
 
     """
@@ -393,6 +440,7 @@ private struct SnapshotChrome<Content: View>: View {
                     Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
+                DemoBadge()
             }
             .padding(.horizontal, 16)
             .frame(height: 44)

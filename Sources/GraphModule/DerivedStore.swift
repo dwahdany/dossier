@@ -300,6 +300,7 @@ extension Ontology {
             if ch.isUppercase, let last = out.last, last.isLowercase || last.isNumber { out.append(" "); out.append(contentsOf: ch.lowercased()) }
             else { out.append(ch) }
         }
-        return out
+        // "isICloudFamily" → "ICloud family": keep the product's own spelling.
+        return out.replacingOccurrences(of: "ICloud", with: "iCloud")
     }
 }

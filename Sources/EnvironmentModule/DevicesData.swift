@@ -209,7 +209,7 @@ enum DevicesLoader {
                 let hasNodes = await db.hasColumns("ZIRNODEMO", ["ZCANDIDATE"])
                 let hasDates = await db.hasColumns("ZIRCANDIDATEMO", ["ZFIRSTSEENDATE", "ZLASTSEENDATE", "ZLASTUSEDDATE"])
                 let hasCandidates = hasNodes && hasDates
-                let cols = await db.columnNames(of: "ZIRAVOUTPUTDEVICEMO")
+                let cols = await db.columnSet(of: "ZIRAVOUTPUTDEVICEMO")
                 func col(_ name: String) -> String { cols.contains(name) ? "d.\(name)" : "NULL" }
                 let sql = hasCandidates
                     ? "SELECT d.Z_PK, d.ZDEVICENAME, d.ZMODELID, \(col("ZDEVICETYPE")), \(col("ZDEVICESUBTYPE")), \(col("ZDISCOVEREDOVERINFRA")), c.ZFIRSTSEENDATE, c.ZLASTSEENDATE, c.ZLASTUSEDDATE FROM ZIRAVOUTPUTDEVICEMO d LEFT JOIN ZIRNODEMO n ON n.Z_PK = d.ZNODE LEFT JOIN ZIRCANDIDATEMO c ON c.Z_PK = n.ZCANDIDATE LIMIT 1000"

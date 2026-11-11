@@ -1,16 +1,19 @@
-# Dossier — Architecture & Module Author Guide
+# Dossier — Architecture and Module Guide
 
 Dossier is a native macOS (SwiftUI, macOS 15+) viewer that shows the owner of a Mac what
 the system's on-device knowledge and personalization stores hold about them. It is a Swift
 package (no `.xcodeproj`), built with `swift build`.
 
-This document is the contract for module authors. Read it together with the doc comments
-in `Sources/DossierCore` — the reference implementation of everything described here is
-`Sources/RawModule`.
+This document describes how the app is put together and what a feature module has to do:
+the module protocol, the shared data layer and UI components in `DossierCore`, the
+off-screen test harnesses, and the demo data set. Read it together with the doc comments in
+`Sources/DossierCore`; the reference implementation of everything described here is
+`Sources/RawModule`. Building, testing, screenshots and releasing are in
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 ---
 
-## 1. Hard rules
+## 1. Rules for all code
 
 1. **Strictly read-only** toward `~/Library`, `~/Pictures` and `/private/var`. Never write,
    vacuum, checkpoint, or open a system database read-write. Use `SQLiteDB` (opens
@@ -33,17 +36,23 @@ in `Sources/DossierCore` — the reference implementation of everything describe
    comments, tests, fixtures or docs. Paths derive from `Paths` (home directory at runtime),
    never `/Users/<name>`. Generic Apple identifiers (bundle ids, ontology codes, stream,
    table and column names) are fine. Real values are *shown at runtime*, never baked in.
+   The demo data set (§9) follows the same rule from the other side: **schema from the
+   real stores, content always invented.**
 4. **No network** use involving personal data, and **no third-party dependencies** — Apple
    frameworks only (SwiftUI, Charts, MapKit, SQLite3, Foundation, AppKit, Compression…).
-5. **Never launch the GUI from automation**, never `open`, never `screencapture`. Look at
-   your UI only through `--snapshot` / `--uitest` (offscreen) and write PNGs **outside the repository**
-   (they contain personal data; `*.png` is git-ignored as a safety net).
+5. **Scripts and tests never put a window on screen**: no `open`, no `screencapture`, no
+   posted input events. UI is checked through `--snapshot` / `--screenshot` / `--uitest`
+   (off-screen), and PNGs made from real stores are written **outside the repository**
+   (they contain personal data; `*.png` is git-ignored as a safety net, and only
+   `docs/images/`, rendered from demo data, is exempt).
 6. **All I/O off the main thread.** Page everything (`LIMIT`/`OFFSET` or keyset), `mmap`
    big files, never load a whole store into memory.
 7. Schemas differ per macOS version: **probe** (`tableExists`, `columnNames`, `hasColumns`)
    and degrade gracefully when a store / table / column is missing.
-8. Do not edit `Package.swift`, `ModuleRegistry.swift`, `DossierCore` or another module's
-   target from a feature-module task. Need something in Core? Ask the lead.
+8. **Modules are independent.** A feature module depends on `DossierCore` only, never on
+   another module, and is registered in exactly one place (`ModuleRegistry.swift`).
+   Anything two modules need (a reader, a component, a name table) belongs in Core;
+   propose that as its own change rather than copying it into a module.
 
 ---
 
@@ -51,6 +60,11 @@ in `Sources/DossierCore` — the reference implementation of everything describe
 
 ```
 Package.swift                       all targets (Swift 5 language mode, tools 6.0)
+README.md                           what the app does, install, privacy, limitations
+DEVELOPMENT.md                      build, self-test, UI test, demo data, screenshots, signing, releasing
+PRIVACY.md                          the privacy policy
+LICENSE                             MIT
+VERSION                             the release version (read by make-app.sh and release.sh)
 Sources/DossierCore/                shared library
   Module.swift                      DossierModule protocol, ModuleSection, summaries, search hits
   Data/Paths.swift                  store locations, probing, daemon containers, FileProbe
@@ -61,6 +75,7 @@ Sources/DossierCore/                shared library
   Data/DataNode.swift               display tree + BlobSniffer
   Data/Dates.swift                  DossierDate (epochs, formatting), Format (counts/bytes/durations)
   Data/FastProto.swift              FastProto (allocation-free protobuf walker), ByteNeedle, LZFSE
+  Data/DemoGuard.swift              demo mode (DOSSIER_DEMO_ROOT): kernel sandbox, reader audit, self-test lines
   Data/AppDirectory.swift           AppDirectory (bundle id → name / icon), AppIcon, AppLabel
   UI/LoadState.swift                LoadState, AsyncContent, placeholders, environment values, SnapshotReadiness
   UI/PagedTable.swift               PagedTable, PagedColumn, PageRequest
@@ -73,14 +88,23 @@ Sources/DossierCore/                shared library
                                     AdaptiveMasterDetail
   UI/LayoutSelfTest.swift           --selftest lines for the shared layouts' minimum / ideal sizes
   Runner/DossierRunner.swift        CLI (--selftest/--snapshot/...), offscreen snapshotter, dev shell
-  Runner/UITest.swift               --uitest: real-window UI test (layout invariants, synthesized input, report)
+  Runner/UITest.swift               --uitest: real-window UI test (layout invariants, synthesized input, report);
+                                    --screenshot: one picture of that window
   UI/UITestProbe.swift              layout probes used by --uitest (inactive otherwise)
 Sources/DossierApp/                 executable "Dossier": window, sidebar, search, overview, settings
   ModuleRegistry.swift              THE module list (one file)
 Sources/<Name>Module/               one library target per feature module
 Sources/Dev/<id>/main.swift         executable "dossier-dev-<id>" hosting only that module
-scripts/make-app.sh                 release build → build/Dossier.app (Info.plist, generated icon, ad-hoc signature)
+scripts/make-app.sh                 release build → build/Dossier.app (Info.plist, generated icon, ad-hoc signature);
+                                    --universal, --dmg, --notarize (Developer ID, notarized, stapled)
 scripts/make-icon.swift             draws the app icon into an .iconset (no external assets)
+scripts/make-demo-data.py           builds the synthetic demo data set (§9); Python 3 standard library only
+                                    (plus the system's libcompression through ctypes, when present)
+scripts/make-screenshots.sh         renders the README pictures into docs/images/ from demo data
+scripts/release.sh                  notarized build, tag, GitHub release
+docs/images/                        README pictures (demo data only), app icon, download badge
+scripts/demo/                       persona.py (the invented owner), lib.py (format writers), selfcheck.py,
+                                    one generator per module id (<moduleID>.py)
 ```
 
 Modules (target / id): `GraphModule`/`graph`, `CommsModule`/`comms`,
@@ -95,13 +119,13 @@ A module target may contain any number of files. Keep the class name, the `id` a
 
 ## 3. Build, self-test, snapshot
 
-Several module authors build in the same checkout at the same time. SwiftPM takes a lock
-on its build directory, so **give every module its own scratch path** — otherwise builds
-queue behind each other and overwrite each other's products. `.build-*/` is git-ignored.
+Each module also builds as its own small executable, which is the fast way to work on one.
+SwiftPM takes a lock on its build directory, so two builds in one checkout queue behind
+each other; a separate `--scratch-path` per build avoids that (`.build-*/` is git-ignored).
 
 ```sh
-B=.build-<id>                                           # your private build directory
-swift build --product dossier-dev-<id> --scratch-path $B    # your module + Core only (fast)
+B=.build-<id>                                           # a build directory for this module
+swift build --product dossier-dev-<id> --scratch-path $B    # this module + Core only (fast)
 swift build --target <Name>Module --scratch-path $B         # compile check of the library alone
 
 $B/debug/dossier-dev-<id> --list                    # module + section ids
@@ -114,21 +138,21 @@ $B/debug/dossier-dev-<id> --search "<query>"        # prints search() hits
 $B/debug/dossier-dev-<id> --snapshot <sectionID|moduleID> /path/outside/repo/x.png \
       [--dark] [--size 1400x850] [--wait 20] [--privacy] [--payload "<deep link>"] [--scale 2]
 
-# Whole app (builds every module — only when you need it; other modules may be mid-edit):
+# Whole app (builds every module):
 swift build --scratch-path $B
 $B/debug/Dossier --selftest [moduleID]              # same flags on the full app
 $B/debug/Dossier --snapshot overview out.png        # the Overview dashboard
 $B/debug/Dossier --snapshot app out.png             # whole window content (sidebar + detail)
 ```
 
-Never run a dev executable or `Dossier` **without** flags from automation: that starts the
-GUI.
+A dev executable or `Dossier` started **without** flags opens the GUI; scripts always
+pass one.
 
 `--selftest` on the full app ends with a `== timing` table (self-test and `summary()` time
 per module) and fails if all summaries, run concurrently as the Overview does, take more
 than 6 s. `--search` runs every module concurrently and exits 1 if a hit names a section
 that does not exist. `scripts/make-app.sh` builds `build/Dossier.app`; test the bundle with
-`build/Dossier.app/Contents/MacOS/Dossier --selftest` (never `open` it from automation).
+`build/Dossier.app/Contents/MacOS/Dossier --selftest` (scripts never `open` it).
 
 Snapshot facts:
 
@@ -151,7 +175,16 @@ Snapshot facts:
 * `--privacy` renders with Privacy Mode on — check that everything personal is blurred.
 * `--snapshot app` honours `DOSSIER_SNAPSHOT_SECTION=<id>`, `DOSSIER_SNAPSHOT_SEARCH=<q>`,
   `DOSSIER_SNAPSHOT_NO_FDA=1`.
-* Always *Read the PNG* after changing UI. Check light and dark.
+* `--screenshot <section> out.png` renders the **whole window** instead (title bar,
+  toolbar, sidebar with only the shown module expanded) from the off-screen window of
+  §3a, at 2 pixels per point by default: `--size WxH` is the window size in points,
+  `--payload`, `--query <text>` (global search results), `--select-row n`, `--dark`,
+  `--privacy`, `--wait`, `--linger <seconds>`. It is what `scripts/make-screenshots.sh`
+  uses for the README pictures. The picture is drawn in-process, without the window
+  server, so materials are flat and the window looks inactive (grey traffic lights, no
+  accent-coloured selection); sidebar icons are tinted explicitly in captures because
+  their system tint is lost that way (`SidebarLabelStyle`).
+* Always look at the PNG after changing UI. Check light and dark.
 
 ---
 
@@ -179,7 +212,7 @@ $B/debug/dossier-dev-<id> --uitest <id>.<section> --out $OUT  # one section
 # the full app
 swift build --scratch-path $B
 $B/debug/Dossier --uitest overview --out $OUT                 # one section (or `<moduleID>` for one module)
-$B/debug/Dossier --uitest all --out $OUT                      # everything (5–8 min; longer on a busy machine)
+$B/debug/Dossier --uitest all --out $OUT                      # everything (5–15 min)
 
 # options
 #   --sizes 980x600,1360x860     content sizes (default: shell minimum, 1360x860, 1800x1100)
@@ -195,7 +228,7 @@ $B/debug/Dossier --uitest all --out $OUT                      # everything (5–
 ```
 
 Exit code 0 = no failure, 1 = failures, 2 = bad arguments, 3 = run exceeded 25 minutes.
-Run it after every UI change, before handing a module in, and whenever you touch a custom
+Run it after every UI change, before proposing a change to a module, and whenever you touch a custom
 `Layout`, a header strip, a master–detail split or anything with `.fixedSize()`.
 
 **What it does per section**, with the sidebar visible: clicks the section's sidebar row,
@@ -292,7 +325,7 @@ and `numbers` — `sectionProposedWidth` (what the detail column offered),
 `contentMinWidth/Height`, `windowWidth/Height`; `pngScrolled` lists the captures further
 down the page. `global[]` holds the window-level
 interaction checks, `globalLayouts[]` their layouts and PNGs, `auxiliary[]` Settings.
-Always *Read the PNG* of a failing layout.
+Always look at the PNG of a failing layout.
 
 **Layout rules this enforces**
 
@@ -448,6 +481,10 @@ Paths.personalizationPortrait, Paths.suggestions, Paths.assistant, Paths.trial, 
 Paths.callHistory, Paths.callHistoryDirectory, Paths.languageModeling
 Paths.photosLibrary, Paths.photosSQLite, Paths.photosSearchIndex, Paths.photosPrivate      // optional URLs
 Paths.daemonContainerData("com.apple.linkd")                                              // by MCMMetadataIdentifier
+Paths.system("/private/var/db/…")       // an absolute location outside the home directory — never URL(fileURLWithPath:)
+Paths.isDemo, Paths.demoRoot            // demo mode (§9): home and system() resolve below DOSSIER_DEMO_ROOT
+Paths.allows(url)                       // false in demo mode for anything outside the root; Core's readers ask it
+Paths.displayPath(url)                  // what to show for a location (= Format.tildePath): never the demo root itself
 Paths.probe(url) -> Availability        // .available / .missing / .inaccessible(reason); never prompts
 Paths.protectedStores()                 // stores beyond Full Disk Access (Screen Time, locationd, system knowledgeC): reported, never opened
 Paths.hasFullDiskAccess()
@@ -934,20 +971,320 @@ their own. If you keep a cache (actor), invalidate it when the token changes —
 
 ---
 
-## 8. Checklist before handing in a module
+## 8. Checklist for a module change
 
 1. `swift build --product dossier-dev-<id> --scratch-path .build-<id>` — no warnings in
-   your target.
+   the module's target.
 2. `dossier-dev-<id> --selftest` — meaningful PASS lines (store availability, schema
    probes, row counts cross-checked against the `sqlite3` CLI opened with
    `file:…?mode=ro`), no FAIL.
 3. `--summary` returns within a few seconds with stores + honest facts.
 4. `--search` finds something sensible; hits open the right section with the right row.
 5. Snapshot every section, light and dark, plus one with `--privacy` and one with
-   `DOSSIER_SNAPSHOT_SELECT_ROW=0`; Read the PNGs; store them outside the repository.
-6. `dossier-dev-<id> --uitest --out <dir outside the repo>` exits 0 (§3a); Read the PNGs
+   `DOSSIER_SNAPSHOT_SELECT_ROW=0`; look at the PNGs; store them outside the repository.
+6. `dossier-dev-<id> --uitest --out <dir outside the repo>` exits 0 (§3a); look at the PNGs
    of anything it flags, and the minimum-size, `-scrolled` and `-selected` ones in any
    case. Sections with tabs or modes declare `uiTestPayloads` so every tab is covered.
 7. Grep your sources for personal data and absolute home paths.
 8. Missing-store behaviour: temporarily point a path at a non-existent file and confirm
    the placeholder (do not commit that change).
+
+---
+
+## 9. Demo data
+
+Screenshots in the README and anything else that is published must never show a real
+person's stores. Dossier therefore has a **demo mode** that points the whole app at a
+synthetic data set, and a generator that builds that data set.
+
+**The rule: schema from the real stores, content always invented.** A generator may know a
+store's file layout, table and column names, types, enum codes and protobuf field numbers —
+learn them from the readers in `Sources/` or by looking at a real store read-only
+(`sqlite3 "file:…?mode=ro"`, `.schema`, `typeof()`, `SELECT DISTINCT <enum column>`). It
+may never contain a row, name, handle, address, coordinate, title, message, URL, topic
+choice, app list, device name, SSID, count or date that came out of a real store. Generic
+system vocabulary (ontology codes and labels, stream names, bundle ids of Apple apps) is
+not personal data.
+
+```sh
+scripts/make-demo-data.py /tmp/dossier-demo            # [--seed N] [--only graph,biome] [--now 2026-01-31T09:00:00Z]
+scripts/make-demo-data.py --check                      # unit checks of the helpers in scripts/demo/lib.py
+
+export DOSSIER_DEMO_ROOT=/tmp/dossier-demo
+$B/debug/Dossier --selftest                            # incl. the demo checks below
+$B/debug/Dossier --summary                             # every store a module looks for, with its path
+$B/debug/Dossier --snapshot overview /tmp/shots/overview.png --size 1400x1000 --scale 2
+DOSSIER_SNAPSHOT_SECTION=graph.me $B/debug/Dossier --snapshot app /tmp/shots/window.png   # with the sidebar
+$B/debug/dossier-dev-<id> --selftest                   # the dev executables honour the variable too
+```
+
+Choose a neutral directory for the root: a few views show raw paths, and the root's own
+path would then appear in them. Run the script with `/usr/bin/python3` (3.9+); it needs
+nothing but the standard library and never touches the network or a real store.
+
+### 9.1 The demo-root contract (`DOSSIER_DEMO_ROOT`)
+
+When the environment variable names a directory, for the whole process:
+
+| | normal | demo mode |
+| --- | --- | --- |
+| `Paths.home` | the user's home directory | `<root>/Home` |
+| `Paths.library`, every `Paths.*` store URL | `~/Library/…` | `<root>/Home/Library/…` |
+| `Paths.system("/private/var/db/CoreDuet/People")` | that path | `<root>/private/var/db/CoreDuet/People` |
+| `Paths.protectedStores()` | `/private/var/db/locationd`, …, the Darwin user directory | `<root>/private/var/…`, `<root>/private/var/folders/demo/0/…` |
+| `Paths.photosLibrary` | first library in `~/Pictures` | first in `<root>/Home/Pictures` (no override, no remembered choice) |
+| `Paths.daemonContainer(id)` | scan of `~/Library/Daemon Containers` | scan of `<root>/Home/Library/Daemon Containers` |
+| `Paths.hasFullDiskAccess()` | probes protected files | `true` |
+| `Paths.allows(url)` | `true` | `true` only below the root (and for the self-tests' own scratch files in the temporary directory, `dossier-selftest-*` / `dossier-shmtest-*`) |
+| UI preferences (`AppState.preferences`, `@AppStorage`) | the app's user defaults | a separate domain, `dev.dossier.viewer.demo` |
+| `Format.tildePath` / `Paths.displayPath` | `~/…` | `~/…` for `<root>/Home/…`, `/private/var/…` for `<root>/private/var/…` |
+| `AppDirectory` (names, icons) | every installed app | only apps that ship with macOS (`/System/…`, Safari); others use the built-in name table and the placeholder icon |
+| locale, time zone | this Mac's | `en_NZ`, `Pacific/Auckland` (`DOSSIER_DEMO_LOCALE`, `DOSSIER_DEMO_TZ`; empty = this Mac's) |
+
+A store the generators have not written yet is simply missing: sections show their
+"Not on This Mac" placeholders and `summary()` reports `.missing`.
+
+Three layers keep a demo run away from the real stores (`DemoGuard`):
+
+1. **Path resolution.** All store paths derive from `Paths.home` / `Paths.system`. **Modules
+   never build a path with `NSHomeDirectory()`, `homeDirectoryForCurrentUser`,
+   `"~"`, `getpwuid`, `/Users/…`, or `URL(fileURLWithPath: "/private/var/…")` /
+   `"/System/…"`** — use `Paths`. Never follow an absolute path stored *inside* a store
+   without `Paths.allows(path:)` (as `PhotosLibraryLocator` does for `SystemLibraryPath`).
+2. **Reader guard.** `Paths.probe`, `FileProbe`, `SQLiteDB` and `SEGBFile` ask
+   `Paths.allows` and treat a location outside the root as missing; symlinks are resolved
+   first (`realpath`), so a link pointing out of the root does not get through. Every
+   refusal is recorded and fails the self-test.
+3. **Kernel sandbox.** `DemoGuard.activate()` (called by `DossierRunner` before anything
+   else) applies a sandbox profile to the process that denies reading and writing the real
+   store locations (`~/Library/Biome`, `IntelligencePlatform`, `Containers`,
+   `Daemon Containers`, `Mail`, `Messages`, `Safari`, `~/Pictures`, `/private/var/db/CoreDuet`,
+   … — `DemoGuard.realStoreRoots()`). Code that bypasses layers 1 and 2 —
+   `Data(contentsOf:)` on a hand-built path — gets "Operation not permitted", not data.
+   It uses `sandbox_init`, which is deprecated API. If it is unavailable or fails (it
+   does inside another sandbox), the window, `--snapshot`, `--screenshot` and `--uitest`
+   refuse to start and the self-test fails, because frameworks read some real locations
+   on their own (the text system opens `~/Library/Spelling` when the search field is typed
+   into) and only this layer stops that. `DOSSIER_DEMO_ALLOW_UNSANDBOXED=1` continues on
+   layers 1 and 2 alone and turns the failure into a WARN.
+
+A demo root that is, contains or lies inside one of the real store locations is refused at
+start (`DemoGuard.rootCollision()`): the sandbox could not deny that location otherwise.
+**A module that starts reading a new location must add its real root to
+`DemoGuard.realStoreRoots()`**; the self-test fails until it does (below).
+
+`--selftest` in demo mode adds, in the `core` block: the root is a directory; every known
+store path resolves below it; the Full Disk Access check reports granted; the sandbox
+denies a real location (observed, not assumed: it probes `~/Pictures`, which privacy
+protection does not cover, so the denial can only be the sandbox's). And at the very end,
+after every module's self-test and summary: no reader asked for a location outside the
+root; the real counterpart of every location that was read lies on the sandbox's deny
+list; no file this process has open lies in a real store. The second-layer audit only sees what goes
+through Core's readers — direct `Data(contentsOf:)` / `FileManager` calls in a module are
+covered by layers 1 and 3, not counted there.
+
+**UI.** `DemoBadge()` (Core) renders a small "Demo data" capsule in demo mode and nothing
+otherwise. The app shows it in the sidebar footer, `--snapshot` in its title strip, so a
+screenshot always says what it is. The Overview's headline, introduction, window subtitle
+and store states do not claim "this Mac" in demo mode. Section copy inside modules still
+says "your Mac" / "you" in places; the badge is what makes the picture honest.
+
+### 9.2 The persona (`scripts/demo/persona.py`)
+
+One invented person shared by all generators: **Robin Sample**, Wellington, New Zealand,
+product designer at the invented company **Kōwhai Labs**. Family, friends and colleagues
+are invented; every e-mail address uses `example.com` / `example.org` / `example.net`;
+phone numbers are in the range reserved for fiction (`+1 202 555 01xx`); places are public
+landmarks, invented cafés and public streets in Wellington with approximate public
+coordinates (private places carry no house number); devices are "Robin's MacBook Pro"
+(this Mac), "Robin's iPhone", "Robin's Apple Watch", "Robin's iPad" with random
+identifiers; apps are Apple apps and very widely used third-party apps; music is
+public-domain classical works and invented artists.
+
+```python
+persona.owner                         # Person: .given .family .full_name .emails .phones .handle .contact_id .graph_id
+persona.others                        # everyone else;  persona.family;  persona.people_with("colleague")
+persona.person("partner")             # by key ("alex") or relationship
+persona.weighted_person(rng)          # someone else, close contacts more often (Person.closeness)
+persona.place("home")                 # Place: .name .kind .street .city .postal_code .country .latitude .longitude
+                                      #        .address .label .visits_per_month .graph_id .jitter(rng, metres)
+persona.places                        # home, work, cafés, landmarks, transit, gym, parents, three trips
+persona.this_mac, persona.remote_devices, persona.device("iphone")
+                                      # Device: .name .kind .platform (2 iPhone/iPad, 3 Mac, 4 Watch) .model
+                                      #         .os_version .os_build .identifier .ids_identifier .is_me
+persona.apps, persona.apps_on("iphone"), persona.app("com.apple.MobileSMS"), persona.weighted_app(rng, "mac")
+persona.tracks, persona.podcasts, persona.topics, persona.web_domains, persona.networks
+persona.company, persona.locale, persona.time_zone, persona.tz_offset_hours, persona.languages
+```
+
+Identifiers (contact ids, graph node ids, device identifiers) derive from the seed, names
+never do. Use the persona's identifiers wherever two stores must agree (a device
+identifier under `remote/` and in `sync.db`; a person's `graph_id` in the graph and in a
+view). Add to the persona when several modules need the same new thing; keep
+module-specific invention in the module's generator. Topic `qid`s are best effort — check
+them against the table compiled into the app before relying on them.
+
+### 9.3 Generator API
+
+One file per module id, `scripts/demo/<moduleID>.py`, exposing exactly:
+
+```python
+def generate(root: pathlib.Path, persona: Persona, rng: random.Random, now: datetime.datetime) -> None:
+```
+
+* `root` — the demo root. Write only below it, through `lib.library(root, …)`,
+  `lib.system(root, …)`, `lib.photos_library(root)`, `lib.daemon_container(root, …)`.
+* `persona` — §9.2, the same object for every module.
+* `rng` — a `random.Random` seeded from `--seed` **and the module id**: your output does
+  not change when another module draws more numbers. Take every random choice and every
+  identifier from it (`lib.uuid_string(rng)`); never `uuid.uuid4()`, `random.random()`,
+  `os.urandom`.
+* `now` — timezone-aware UTC. **All dates are relative to it** (`lib.Clock`), so the data
+  always looks current; nothing is in the future unless the store holds future things
+  (calendar events). Do not call `datetime.now()` yourself.
+
+Rules: standard library only; no network; never read anything outside `root`; SQLite
+files through `lib.sqlite_db` / `lib.create_db` (rollback journal, no `-wal` / `-shm`);
+write no absolute path into a store unless the real store holds one (and then an invented
+one such as `/Users/robin/…`); several modules may write into the same directory
+(`Biome/streams/restricted`, `knowledgeC.db`) — the modules run in the order of
+`demo.MODULE_IDS`, a shared *file* belongs to the first module that needs it and later
+ones append (`sqlite3.connect` on the existing file, `lib.write_stream` adds segments).
+`graph.py` is the worked example.
+
+Work loop for one module:
+
+```sh
+scripts/make-demo-data.py $ROOT --only <id>          # or without --only for the full set
+DOSSIER_DEMO_ROOT=$ROOT $B/debug/dossier-dev-<id> --selftest
+DOSSIER_DEMO_ROOT=$ROOT $B/debug/dossier-dev-<id> --summary        # which stores are still "Not present"
+DOSSIER_DEMO_ROOT=$ROOT $B/debug/dossier-dev-<id> --snapshot <section> $OUT/x.png   # look at the PNG
+```
+
+### 9.4 Helper reference (`scripts/demo/lib.py`)
+
+```python
+from demo import lib
+from demo.lib import pb
+```
+
+**Paths**
+
+```python
+lib.home(root)                                   # <root>/Home
+lib.library(root, "Biome/sync/sync.db")          # <root>/Home/Library/…
+lib.system(root, "/private/var/db/CoreDuet/People/interactionC.db")
+lib.darwin_user_dir(root)                        # <root>/private/var/folders/demo/0
+lib.photos_library(root)                         # <root>/Home/Pictures/Photos Library.photoslibrary
+lib.daemon_container(root, "com.apple.linkd", rng)   # creates the container + metadata plist, returns its Data dir
+lib.ensure_dir(p); lib.ensure_parent(p); lib.write_bytes(p, data); lib.write_text(p, text)
+```
+
+**Dates**
+
+```python
+clock = lib.Clock(now, persona.tz_offset_hours)
+clock.ago(days=3, hours=2)                        # datetime
+clock.at(days_ago=1, hour=8, minute=30)           # 08:30 in the persona's time zone yesterday (never in the future)
+clock.spread(rng, 200, days=90, hours=(7, 23), recent_bias=1.5)   # sorted datetimes in waking hours
+clock.sessions(rng, days=30, per_day=(3, 9), seconds=(20, 1800))  # [(start, seconds)], non-overlapping
+lib.cocoa(dt)        # seconds since 2001 (CoreData, Biome, NSDate)      lib.from_cocoa(seconds)
+lib.unix(dt)  lib.unix_ms(dt)  lib.webkit_us(dt)  lib.iso(dt)
+```
+
+**Identifiers** — `lib.uuid_string(rng)` (upper case; `upper=False`), `lib.uuid_obj(rng)`,
+`lib.hex_string(rng, 16)`.
+
+**SQLite**
+
+```python
+lib.create_db(path, DDL, {"ZOBJECT": [(1, "/app/usage", 7.5e8), {"Z_PK": 2, "ZSTREAMNAME": "/app/intents"}]})
+
+with lib.sqlite_db(path, DDL, user_version=34) as con:      # commit + close on exit
+    lib.insert(con, "t", rows)                              # tuples (all columns) or dicts (named columns)
+    lib.coredata_tables(con, {"Interaction": 1, "Contact": 2}, rng, max_pk={"Interaction": 40})
+                                                            # Z_PRIMARYKEY / Z_METADATA / Z_MODELCACHE
+```
+
+Copy the DDL from the real store's `sqlite_master` (schema only). Virtual tables whose
+module is not in the system SQLite (custom FTS tokenizers) cannot be created — leave them
+out; the readers already fall back to the plain tables.
+
+**Protobuf** — a message is a list of `(field, value)` pairs (repeat a number for repeated
+fields) or a dict:
+
+```python
+payload = pb.message([
+    (1, "com.apple.Safari"),          # str → length-delimited
+    (2, lib.cocoa(when)),             # float → 64-bit double (Biome timestamps)
+    (3, True), (4, 42),               # bool / int → varint
+    (5, [(1, "nested"), (2, 7)]),     # list of pairs or dict → nested message
+    (6, b"\x00\x01"),                 # bytes
+    (7, None),                        # left out
+    (8, pb.sint(-3)), (9, pb.fixed64(1)), (10, pb.fixed32(1)), (11, pb.float32(0.5)),
+    (12, pb.packed([1, 2, 3])),       # also pb.packed_doubles / pb.packed_floats
+])
+```
+
+**Biome SEGB** (version 2, the framing §5.3 describes; checked against the app's reader:
+record counts, first / last timestamps and all CRCs agree)
+
+```python
+stream = lib.biome_stream_dir(root, "App.InFocus")                  # ~/Library/Biome/streams/restricted/App.InFocus
+lib.write_stream(stream, [(when, payload), …])                      # → local/<segment>, split every 4000 records
+lib.write_stream(stream, records, device=persona.device("iphone").identifier)   # → remote/<identifier>/<segment>
+lib.SEGBRecord(when, payload, deleted=True)                         # a deleted record (state 3, zero-filled)
+lib.write_segb(path, records)   lib.segb_bytes(records)             # one segment file, anywhere
+lib.write_biome_sync_db(root, persona.devices, now, rng)            # ~/Library/Biome/sync/sync.db › DevicePeer
+```
+
+Segment files are named after their first record (microseconds since 2001) and padded to
+4096-byte pages like the originals. Other stream roots work the same way: pass
+`lib.library(root, "DuetExpertCenter/streams/<name>")` or a directory inside a daemon
+container as the stream directory. `sync.db` is written by whoever runs first among the
+modules that need device names (`write_biome_sync_db(..., extra_ddl=…)` adds tables).
+
+**Plists and keyed archives**
+
+```python
+lib.write_plist(path, {"SystemLibraryPath": "…", "when": clock.ago(days=1)}, binary=True)
+lib.plist_bytes(value, binary=True)
+blob = lib.keyed_archive({                                           # NSKeyedArchiver, root object under $top.root
+    "name": "Robin", "when": clock.ago(days=2), "tags": ["a", "b"],  # dict / list / set / datetime / uuid.UUID / bytes
+    "link": lib.ArchiveURL("https://example.com/"),
+    "member": lib.ArchiveObject("FAFamilyMember", {"_firstName": "Robin", "_age": 34}, classes=["FAFamilyMember", "NSObject"]),
+}, mutable_collections=False, top_key="root")
+```
+
+**Compression.** Python has no LZFSE encoder. `lib.lzfse_stored(data)` writes a valid LZFSE
+stream made of *uncompressed blocks* (`bvx-` + length + bytes, ended by `bvx$`), which
+Apple's decoder — and so `LZFSE.decode` in Core — reads like any other (`--selftest`
+checks this in the `core` block). Use it wherever a store holds LZFSE (`bvx…`) data; it
+cannot represent an empty payload. Zip archives: `zipfile` (stored or deflated). zlib:
+`zlib`.
+
+### 9.5 Verification
+
+* `scripts/make-demo-data.py --check` — helper unit checks: protobuf against the reference
+  byte vectors of the encoding documentation, SEGB against a second reader, SQLite journal
+  mode and leftovers, plists and archives through `plistlib`, the persona's own rules
+  (reserved e-mail domains and phone range, unique identifiers, determinism per seed).
+* `DOSSIER_DEMO_ROOT=… Dossier --selftest` — the app's own readers on the generated data:
+  the `raw` block parses every segment and verifies every record's CRC-32
+  (`DOSSIER_RAW_VERIFY_STREAMS=<name>` prints per-device counts and first / last timestamps
+  to compare with what the generator wrote), plus the demo checks of §9.1.
+* Look at every screenshot before it is published: it must show only persona data and the
+  "Demo data" marker.
+
+### 9.6 Limitations
+
+* The sandbox list is a fixed list of real store locations, not "everything outside the
+  root": the process still reads what any AppKit process reads (fonts, its own
+  preferences, system frameworks). A Photos library outside `~/Pictures` is not on the
+  list — it is unreachable in demo mode only because the locator ignores overrides.
+* Maps still download Apple map tiles for the area shown (Wellington in the demo set).
+* The persona's UTC offset is fixed (+13, New Zealand daylight time), so "waking hours"
+  are an hour off during New Zealand winter.
+* Deterministic apart from the clock: with the same `--seed` and `--now` two runs write
+  the same content; SQLite file bytes can still differ between SQLite versions.
+

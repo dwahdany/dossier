@@ -21,6 +21,7 @@ struct DossierApplication: App {
     var body: some Scene {
         Window("Dossier", id: "main") {
             DossierApplication.windowContent(state)
+                .defaultAppStorage(AppState.preferences)
         }
         .defaultSize(width: DossierApplication.defaultSize.width, height: DossierApplication.defaultSize.height)
         .commands { DossierCommands(state: state) }
@@ -28,6 +29,7 @@ struct DossierApplication: App {
         Settings {
             SettingsView()
                 .environmentObject(state)
+                .defaultAppStorage(AppState.preferences)
         }
     }
 }
@@ -93,7 +95,7 @@ enum AboutPanel {
         )
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Dossier",
-            .applicationVersion: "0.1",
+            .applicationVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "development build",
             .version: "",
             .credits: credits,
         ])

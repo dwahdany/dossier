@@ -12,34 +12,43 @@ struct Chip: Identifiable {
 /// Horizontally scrolling row of filter chips with counts.
 struct ChipBar: View {
     let chips: [Chip]
+    /// Wrap onto further lines instead of scrolling sideways.
+    var wraps = false
     let isOn: (String) -> Bool
     let toggle: (String) -> Void
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(chips) { chip in
-                    let on = isOn(chip.id)
-                    Button { toggle(chip.id) } label: {
-                        HStack(spacing: 5) {
-                            if let symbol = chip.symbol { Image(systemName: symbol).imageScale(.small) }
-                            Text(chip.title)
-                            if let count = chip.count {
-                                Text(Format.compact(count)).monospacedDigit().foregroundStyle(on ? AnyShapeStyle(.primary.opacity(0.7)) : AnyShapeStyle(.tertiary))
-                            }
-                        }
-                        .font(.callout)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(on ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06), in: Capsule())
-                        .overlay(Capsule().strokeBorder(on ? Color.accentColor.opacity(0.55) : Color.clear, lineWidth: 1))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .help(chip.title)
-                }
+        if wraps {
+            FlowLayout(spacing: 6, lineSpacing: 5) { buttons }
+                .padding(.vertical, 2)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) { buttons }
+                    .padding(.vertical, 2)
             }
-            .padding(.vertical, 2)
+        }
+    }
+
+    private var buttons: some View {
+        ForEach(chips) { chip in
+            let on = isOn(chip.id)
+            Button { toggle(chip.id) } label: {
+                HStack(spacing: 5) {
+                    if let symbol = chip.symbol { Image(systemName: symbol).imageScale(.small) }
+                    Text(chip.title).lineLimit(1)
+                    if let count = chip.count {
+                        Text(Format.compact(count)).monospacedDigit().foregroundStyle(on ? AnyShapeStyle(.primary.opacity(0.7)) : AnyShapeStyle(.tertiary))
+                    }
+                }
+                .font(.callout)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(on ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06), in: Capsule())
+                .overlay(Capsule().strokeBorder(on ? Color.accentColor.opacity(0.55) : Color.clear, lineWidth: 1))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(chip.title)
         }
     }
 }

@@ -55,8 +55,111 @@ public struct KnownStore: Identifiable, Sendable, Hashable {
 public enum Paths {
     // MARK: Roots
 
-    /// The real home directory (not a sandbox container).
-    public static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+    /// The home directory every store path derives from: the real home directory (not a
+    /// sandbox container), or `<demo root>/Home` in demo mode (see ``demoRoot``).
+    public static var home: URL { demoRoot?.appendingPathComponent("Home", isDirectory: true) ?? realHome }
+
+    /// The current user's real home directory. Only for the demo-mode guards — store paths
+    /// must derive from ``home``.
+    static var realHome: URL { FileManager.default.homeDirectoryForCurrentUser }
+
+    // MARK: Demo root
+
+    /// Name of the environment variable that switches the whole app to a synthetic data set.
+    public static let demoRootVariable = "DOSSIER_DEMO_ROOT"
+
+    /// The demo root, when `DOSSIER_DEMO_ROOT` names a directory: every store path then
+    /// resolves below it (``home`` → `<root>/Home`, absolute system locations through
+    /// ``system(_:isDirectory:)`` → `<root><absolute path>`), Full Disk Access counts as
+    /// granted and nothing outside the root is read. Read once at start.
+    public static let demoRoot: URL? = {
+        guard let raw = ProcessInfo.processInfo.environment[demoRootVariable], !raw.isEmpty else { return nil }
+        let expanded = (raw as NSString).expandingTildeInPath
+        let absolute = expanded.hasPrefix("/") ? expanded : FileManager.default.currentDirectoryPath + "/" + expanded
+        return URL(fileURLWithPath: canonicalPath(absolute), isDirectory: true)
+    }()
+
+    /// True while the app shows a synthetic data set instead of this Mac's stores.
+    public static var isDemo: Bool { demoRoot != nil }
+
+    /// An absolute system location outside the home directory (`/private/var/db/…`,
+    /// `/System/Library/…`). In demo mode it resolves below the demo root. Never build such
+    /// a URL by hand.
+    public static func system(_ absolutePath: String, isDirectory: Bool = true) -> URL {
+        if let demoRoot {
+            let relative = absolutePath.hasPrefix("/") ? String(absolutePath.dropFirst()) : absolutePath
+            return demoRoot.appendingPathComponent(relative, isDirectory: isDirectory)
+        }
+        return URL(fileURLWithPath: absolutePath, isDirectory: isDirectory)
+    }
+
+    /// Whether a location may be read: always outside demo mode; in demo mode only what
+    /// lies below the demo root (or is one of the self-tests' own scratch files in the
+    /// temporary directory, ``selfTestScratchPrefixes``). Core's readers call this before opening anything and treat a
+    /// refused location as missing; refusals are kept for the self-test (``DemoGuard``).
+    public static func allows(_ url: URL) -> Bool { allows(path: url.path) }
+
+    public static func allows(path: String) -> Bool {
+        guard let demoRoot else { return true }
+        let canonical = canonicalPath(path)
+        let ok = isBelow(canonical, demoRoot.path) || isSelfTestScratch(canonical)
+        DemoGuard.record(canonical, allowed: ok)
+        return ok
+    }
+
+    /// A location as shown in the UI: the home directory abbreviated to "~"; in demo mode
+    /// the demo root itself is never shown (`<root>/Home/Library/x` → `~/Library/x`,
+    /// `<root>/private/var/db/x` → `/private/var/db/x`).
+    public static func displayPath(_ url: URL) -> String {
+        guard let demoRoot else { return (url.path as NSString).abbreviatingWithTildeInPath }
+        let path = canonicalPath(url.path)
+        if isBelow(path, home.path) { return "~" + path.dropFirst(home.path.count) }
+        if isBelow(path, demoRoot.path) {
+            let rest = String(path.dropFirst(demoRoot.path.count))
+            return rest.isEmpty ? "/" : rest
+        }
+        return path
+    }
+
+    private static let demoTemporaryDirectory = canonicalPath(NSTemporaryDirectory())
+
+    /// Name prefixes of the scratch files and folders the self-tests create in the
+    /// temporary directory. Nothing else there is readable in demo mode: other apps keep
+    /// files in the same directory.
+    public static let selfTestScratchPrefixes = ["dossier-selftest-", "dossier-shmtest-"]
+
+    private static func isSelfTestScratch(_ canonical: String) -> Bool {
+        guard isBelow(canonical, demoTemporaryDirectory), canonical != demoTemporaryDirectory else { return false }
+        let base = demoTemporaryDirectory.hasSuffix("/") ? String(demoTemporaryDirectory.dropLast()) : demoTemporaryDirectory
+        guard let first = canonical.dropFirst(base.count).split(separator: "/").first else { return false }
+        return selfTestScratchPrefixes.contains { first.hasPrefix($0) }
+    }
+
+    static func isBelow(_ path: String, _ root: String) -> Bool {
+        let root = root.hasSuffix("/") && root.count > 1 ? String(root.dropLast()) : root
+        return path == root || path.hasPrefix(root + "/")
+    }
+
+    /// `realpath` of the deepest existing ancestor plus the remainder, so that a location
+    /// that does not exist yet (or a symlink pointing out of the root) is still judged by
+    /// where it really is. (`URL.resolvingSymlinksInPath` strips `/private`, hence this.)
+    static func canonicalPath(_ path: String) -> String {
+        var head = (path as NSString).standardizingPath
+        if !head.hasPrefix("/") { head = "/" + head }
+        // `standardizingPath` strips `/private` from `/private/var` and `/private/tmp`;
+        // realpath below puts it back for anything that exists.
+        var tail: [String] = []
+        while true {
+            if let resolved = realpath(head, nil) {
+                let base = String(cString: resolved)
+                free(resolved)
+                return tail.isEmpty ? base : (base == "/" ? "" : base) + "/" + tail.reversed().joined(separator: "/")
+            }
+            if head == "/" || head.isEmpty { return path }
+            tail.append((head as NSString).lastPathComponent)
+            head = (head as NSString).deletingLastPathComponent
+        }
+    }
     public static var library: URL { home.appendingPathComponent("Library", isDirectory: true) }
 
     private static func lib(_ relative: String, dir: Bool = true) -> URL {
@@ -74,7 +177,7 @@ public enum Paths {
 
     public static var knowledgeDirectory: URL { lib("Application Support/Knowledge") }
     public static var knowledgeC: URL { knowledgeDirectory.appendingPathComponent("knowledgeC.db") }
-    public static var coreDuetPeople: URL { URL(fileURLWithPath: "/private/var/db/CoreDuet/People", isDirectory: true) }
+    public static var coreDuetPeople: URL { system("/private/var/db/CoreDuet/People") }
     public static var interactionC: URL { coreDuetPeople.appendingPathComponent("interactionC.db") }
     public static var coreRecents: URL { lib("Containers/com.apple.corerecents.recentsd/Data/Library/Recents") }
     public static var duetExpertCenter: URL { lib("DuetExpertCenter") }
@@ -158,6 +261,7 @@ public enum Paths {
     /// Checks existence and readability without raising any permission prompt.
     public static func probe(_ url: URL?) -> Availability {
         guard let url else { return .missing }
+        guard allows(url) else { return .missing }
         var st = stat()
         if lstat(url.path, &st) != 0 {
             let code = errno
@@ -181,6 +285,7 @@ public enum Paths {
     /// Heuristic Full Disk Access check: tries to open TCC-protected files read-only.
     /// Never triggers a prompt (TCC denies silently for FDA-class paths).
     public static func hasFullDiskAccess() -> Bool {
+        if isDemo { return true }   // nothing protected is read: every path is below the demo root
         let probes: [URL] = [
             lib("Application Support/com.apple.TCC/TCC.db", dir: false),
             knowledgeC,
@@ -200,9 +305,13 @@ public enum Paths {
 
     // MARK: Stores beyond Full Disk Access
 
+    /// Where the per-user Darwin directory lives below a demo root.
+    public static let demoDarwinUserDirectory = "/private/var/folders/demo/0"
+
     /// The per-user Darwin directory (`getconf DARWIN_USER_DIR`), where some agents keep
-    /// their stores.
+    /// their stores. In demo mode: `<root>/private/var/folders/demo/0`.
     public static var darwinUserDirectory: URL? {
+        if isDemo { return system(demoDarwinUserDirectory) }
         var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
         let n = confstr(_CS_DARWIN_USER_DIR, &buffer, buffer.count)
         guard n > 0, n <= buffer.count else { return nil }
@@ -217,10 +326,10 @@ public enum Paths {
         var out: [KnownStore] = [
             KnownStore(id: "protected.locationd", title: "Location Services & Significant Locations",
                        detail: "locationd's client list and the routine / significant-locations data. Owned by the location daemon; visible only in System Settings › Privacy & Security › Location Services after authentication.",
-                       url: URL(fileURLWithPath: "/private/var/db/locationd", isDirectory: true), category: .other),
+                       url: system("/private/var/db/locationd"), category: .other),
             KnownStore(id: "protected.coreduet.knowledge", title: "System knowledgeC",
                        detail: "The system-wide copy of the CoreDuet event store (device-level streams). The per-user knowledgeC.db is readable and shown under Activity.",
-                       url: URL(fileURLWithPath: "/private/var/db/CoreDuet/Knowledge", isDirectory: true), category: .activity),
+                       url: system("/private/var/db/CoreDuet/Knowledge"), category: .activity),
         ]
         if let darwin = darwinUserDirectory {
             out.insert(KnownStore(id: "protected.screentime", title: "Screen Time",
@@ -286,6 +395,7 @@ public enum FileProbe {
 
     /// Size / mtime of a single file (lstat; no directory traversal).
     public static func info(_ url: URL) -> Info? {
+        guard Paths.allows(url) else { return nil }
         var st = stat()
         guard stat(url.path, &st) == 0 else { return nil }
         return Info(
@@ -310,6 +420,7 @@ public enum FileProbe {
         var bytes: Int64 = 0
         var files = 0
         var newest: Date?
+        guard Paths.allows(url) else { return (0, 0, nil) }
         if let info = info(url), !info.isDirectory { return (info.size, 1, info.modified) }
         let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else {
@@ -338,6 +449,7 @@ public enum FileProbe {
 
     /// True if the file starts with the SQLite header magic.
     public static func hasSQLiteHeader(_ url: URL) -> Bool {
+        guard Paths.allows(url) else { return false }
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         let head = (try? handle.read(upToCount: 16)) ?? Data()
@@ -349,6 +461,7 @@ public enum FileProbe {
     /// skipped without being opened). Call off the main thread.
     public static func discoverDatabases(under root: URL, maxDepth: Int = 12) -> [URL] {
         var out: [URL] = []
+        guard Paths.allows(root) else { return [] }
         if let info = info(root), !info.isDirectory {
             return hasSQLiteHeader(root) ? [root] : []
         }

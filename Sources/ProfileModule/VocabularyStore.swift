@@ -259,7 +259,7 @@ enum CustomVocabulary {
     static func textReplacements() async -> [CustomPhrase] {
         guard let db = await SQLiteDB.sharedIfAvailable(ProfilePaths.textReplacements),
               await db.hasColumns("ZTEXTREPLACEMENTENTRY", ["Z_PK", "ZSHORTCUT", "ZPHRASE"]) else { return [] }
-        let cols = await db.columnNames(of: "ZTEXTREPLACEMENTENTRY")
+        let cols = await db.columnSet(of: "ZTEXTREPLACEMENTENTRY")
         let deleted = cols.contains("ZWASDELETED") ? "coalesce(ZWASDELETED, 0)" : "0"
         let stamp = cols.contains("ZTIMESTAMP") ? "ZTIMESTAMP" : "NULL"
         let rows = (try? await db.rows("SELECT Z_PK, ZSHORTCUT, ZPHRASE, \(stamp), \(deleted) FROM ZTEXTREPLACEMENTENTRY ORDER BY Z_PK LIMIT 50000")) ?? []
@@ -494,7 +494,7 @@ enum TrialStore {
         if await db.hasColumns("rolloutsV2", ["rowid", "rolloutId", "deploymentId", "status"]) {
             let namespaces = await db.hasColumns("rolloutV2Namespaces", ["rolloutsV2_rowid", "name"])
                 ? "(SELECT group_concat(n.name, ', ') FROM rolloutV2Namespaces n WHERE n.rolloutsV2_rowid = r.rowid)" : "NULL"
-            let cols = await db.columnNames(of: "rolloutsV2")
+            let cols = await db.columnSet(of: "rolloutsV2")
             let pack = cols.contains("activeFactorPackSetId") ? "r.activeFactorPackSetId" : "NULL"
             let firstSeen = await db.hasColumns("rolloutHistory", ["rolloutId", "eventLogTime"])
                 ? "(SELECT min(h.eventLogTime) FROM rolloutHistory h WHERE h.rolloutId = r.rolloutId)" : "NULL"
@@ -514,13 +514,13 @@ enum TrialStore {
     static func history(_ assignment: TrialAssignment) async -> [TrialEvent] {
         guard let db = await SQLiteDB.sharedIfAvailable(ProfilePaths.trialDB) else { return [] }
         if assignment.kind == "Experiment", await db.hasColumns("experimentHistory", ["rowid", "eventSecondsFromEpoch", "eventType", "experimentId"]) {
-            let cols = await db.columnNames(of: "experimentHistory")
+            let cols = await db.columnSet(of: "experimentHistory")
             let detail = cols.contains("errorOrDeactivationReason") ? "coalesce(errorOrDeactivationReason, treatmentId, '')" : "''"
             let rows = (try? await db.rows("SELECT rowid, eventSecondsFromEpoch, eventType, \(detail) FROM experimentHistory WHERE experimentId = ? ORDER BY 2 DESC LIMIT 200", [.text(assignment.identifier)])) ?? []
             return rows.map { TrialEvent(id: $0[0].int ?? 0, date: $0[1].unixDate, type: Int($0[2].int ?? 0), detail: $0[3].string ?? "") }
         }
         if assignment.kind == "Rollout", await db.hasColumns("rolloutHistory", ["rowid", "eventLogTime", "eventType", "rolloutId"]) {
-            let cols = await db.columnNames(of: "rolloutHistory")
+            let cols = await db.columnSet(of: "rolloutHistory")
             let detail = cols.contains("factorPackSetId") ? "coalesce(factorPackSetId, '')" : "''"
             let rows = (try? await db.rows("SELECT rowid, eventLogTime, eventType, \(detail) FROM rolloutHistory WHERE rolloutId = ? ORDER BY 2 DESC LIMIT 200", [.text(assignment.identifier)])) ?? []
             return rows.map { TrialEvent(id: $0[0].int ?? 0, date: $0[1].unixDate, type: Int($0[2].int ?? 0), detail: $0[3].string ?? "") }
@@ -534,7 +534,7 @@ enum TrialStore {
               await db.hasColumns("activationEvents", ["experimentId"]) else { return [] }
         let wanted = [("OS build", "osBuild"), ("Language", "languageCode"), ("Region", "regionCode"),
                       ("Diagnostics sharing", "diagnosticsUsageEnabled"), ("Neural Engine", "hasAne"), ("Neural Engine version", "aneVersion")]
-        let cols = await db.columnNames(of: "activationEvents")
+        let cols = await db.columnSet(of: "activationEvents")
         let present = wanted.filter { cols.contains($0.1) }
         guard !present.isEmpty,
               let row = try? await db.first("SELECT " + present.map { SQLiteDB.quote($0.1) }.joined(separator: ", ") + " FROM activationEvents WHERE experimentId = ? LIMIT 1", [.text(assignment.identifier)]) else { return [] }

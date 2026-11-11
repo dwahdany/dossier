@@ -458,11 +458,11 @@ struct PeopleSection: View {
                             }
                     }
                     .chartYScale(domain: bars.map(\.label))
-                    .chartXScale(domain: 0...1.12)
+                    .chartXScale(domain: 0...1.25)
                     .chartXAxis {
                         AxisMarks(values: [0, 0.5, 1]) { value in
                             AxisGridLine().foregroundStyle(.quaternary)
-                            AxisValueLabel { if let v = value.as(Double.self) { Text(GraphFormat.percent(v)) } }
+                            AxisValueLabel { if let v = value.as(Double.self) { Text(GraphFormat.percent(v)).fixedSize() } }
                         }
                     }
                     .chartYAxis { AxisMarks(preset: .aligned, position: .leading) { _ in AxisValueLabel() } }

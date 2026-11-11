@@ -209,9 +209,11 @@ struct OverviewView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("What this Mac knows about you")
+                Text(Paths.isDemo ? "What a Mac knows about its owner" : "What this Mac knows about you")
                     .font(.largeTitle.weight(.bold))
-                Text("A read-only look into the on-device knowledge and personalization stores macOS maintains. Nothing is modified and no store content is sent anywhere; maps download Apple map tiles for the area they show.")
+                Text(Paths.isDemo
+                     ? "Demo data: every name, place, message and figure on these pages belongs to an invented person and was generated for screenshots. Nothing here comes from this Mac's stores."
+                     : "A read-only look into the on-device knowledge and personalization stores macOS maintains. Nothing is modified and no store content is sent anywhere; maps download Apple map tiles for the area they show.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -272,7 +274,7 @@ struct OverviewView: View {
         let collapsedCount = 18
         let shown = showAllFacts ? filtered : Array(filtered.prefix(collapsedCount))
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader("Headline Facts", subtitle: ranked.isEmpty ? (model.isLoading ? "Reading the stores…" : "No module reported any facts.") : "What the system holds about you, most private first", symbol: "sparkles") {
+            SectionHeader("Headline Facts", subtitle: ranked.isEmpty ? (model.isLoading ? "Reading the stores…" : "No module reported any facts.") : (Paths.isDemo ? "What the system would hold about the invented owner, most private first" : "What the system holds about you, most private first"), symbol: "sparkles") {
                 Picker("", selection: $factFilter) {
                     Text("All \(ranked.count)").tag(Sensitivity?.none)
                     ForEach([Sensitivity.sensitive, .personal, .low], id: \.self) { level in
@@ -488,6 +490,7 @@ private struct ModuleCard: View {
                             else if sensitive == 0 && blocked == 0 { TagLabel("\(result.summary.facts.count) facts", tint: .secondary) }
                             Spacer(minLength: 0)
                             Text(String(format: "%.2f s", result.seconds)).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                                .lineLimit(1).layoutPriority(-1)
                                 .help("Time this area's summary took to load")
                         }
                     } else {
@@ -589,7 +592,7 @@ private struct AccessRow: View {
 
     private var status: String {
         switch availability {
-        case .available: return "readable on this Mac"
+        case .available: return Paths.isDemo ? "present in the demo data" : "readable on this Mac"
         case .missing: return "not present"
         case .inaccessible(let reason): return beyond ? "protected — \(reason.lowercased())" : "no access — \(reason.lowercased())"
         }

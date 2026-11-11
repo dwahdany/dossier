@@ -28,7 +28,7 @@ final class SearchCoordinator: ObservableObject {
         groups = []
         await withTaskGroup(of: (Int, [SearchHit]).self) { group in
             for (index, module) in modules.enumerated() {
-                group.addTask { (index, await module.search(query, limit: SearchCoordinator.perModuleLimit)) }
+                group.addTask { (index, SearchHit.distinct(await module.search(query, limit: SearchCoordinator.perModuleLimit))) }
             }
             // Publish each module's hits as soon as they arrive, in registry order.
             var collected: [Int: [SearchHit]] = [:]

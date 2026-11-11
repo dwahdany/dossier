@@ -416,8 +416,9 @@ struct TimelineDetailBar: View {
                 Text("\(Format.usage(model.foreground)) of foreground app time across all devices on \(DossierDate.day(model.day)). Hover a block for details, click to pin it, drag the slider to zoom.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+            // Wraps onto further lines: a legend cut off at the window edge hides entries.
+            FlowLayout(spacing: 12, lineSpacing: 5) {
+                Group {
                     ForEach(model.legend, id: \.bundle) { entry in
                         HStack(spacing: 5) {
                             RoundedRectangle(cornerRadius: 2).fill(AppColor.color(entry.bundle)).frame(width: 10, height: 10)
@@ -430,6 +431,7 @@ struct TimelineDetailBar: View {
                     legendSwatch("Display on", .yellow.opacity(0.7))
                     legendSwatch("Media playing", .pink)
                 }
+                .fixedSize()
                 .sensitive(.personal)
             }
         }

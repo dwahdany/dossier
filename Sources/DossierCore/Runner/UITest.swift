@@ -86,6 +86,26 @@ public struct UITestOptions {
     public init() {}
 }
 
+/// What `--screenshot` renders.
+public struct ScreenshotRequest {
+    /// A section id, a module id (its first section) or `"overview"`.
+    public var target = "overview"
+    public var out = URL(fileURLWithPath: "screenshot.png")
+    /// Size of the whole window in points, title bar included.
+    public var size = CGSize(width: 1320, height: 840)
+    public var scale: CGFloat = 2
+    public var dark = false
+    public var privacy = false
+    public var payload: String?
+    /// Text for the toolbar's global search; the picture then shows the hits.
+    public var search: String?
+    /// Seconds to wait for loads.
+    public var timeout: TimeInterval = 30
+    /// Extra seconds on screen before the capture (charts and maps that load in stages).
+    public var linger: TimeInterval = 1.0
+    public init() {}
+}
+
 // MARK: - Report
 
 public struct UITestCheck: Codable {
@@ -190,7 +210,8 @@ public enum UITestRunner {
     private static var eventNumber = 0
     private static var testedSections: Set<String> = []
     /// AppKit animations (sidebar collapse) only run while the display is awake.
-    private static let displayAsleep = CGDisplayIsAsleep(CGMainDisplayID()) != 0
+    /// Asked each time: the display can go to sleep in the middle of a long run.
+    private static var displayAsleep: Bool { CGDisplayIsAsleep(CGMainDisplayID()) != 0 }
     private static var notes: [String] = []
     nonisolated(unsafe) private static var stage = "start" {
         didSet { if verbose { fputs("uitest: \(stage)\n", stderr) } }
@@ -209,7 +230,9 @@ public enum UITestRunner {
         SnapshotReadiness.isSnapshotting = true
         // Sidebar groups must be expanded so every row exists. The argument domain wins
         // over the persistent one and is never written to disk.
-        UserDefaults.standard.setVolatileDomain(["collapsedModules": ""], forName: UserDefaults.argumentDomain)
+        var argumentDomain = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        argumentDomain["collapsedModules"] = ""
+        UserDefaults.standard.setVolatileDomain(argumentDomain, forName: UserDefaults.argumentDomain)
         try? FileManager.default.createDirectory(at: options.outDir, withIntermediateDirectories: true)
         startWatchdog()
 
@@ -337,6 +360,90 @@ public enum UITestRunner {
             print(String(format: "%d section(s), %d size(s), %.1fs. Report: %@", report.sections.count, sizes.count, report.seconds, reportURL.path))
         }
         exit(report.failures.isEmpty ? 0 : 1)
+    }
+
+    // MARK: Screenshot
+
+    /// `--screenshot`: one picture of the real window shell (title bar, toolbar, sidebar)
+    /// showing one section, drawn in-process from the same off-screen window `--uitest`
+    /// uses. Nothing is tested; the exit status only says whether the PNG was written.
+    public static func screenshot(shell: UITestShell, request: ScreenshotRequest) -> Never {
+        self.shell = shell
+        options = UITestOptions()
+        options.dark = request.dark
+        options.screen = CGSize(width: max(request.size.width, 600), height: max(request.size.height, 400))
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        let appearance = NSAppearance(named: request.dark ? .darkAqua : .aqua)
+        app.appearance = appearance
+        SnapshotReadiness.isSnapshotting = true
+
+        let all = shell.sections
+        let target = all.first { $0.id == request.target } ?? all.first { $0.moduleID == request.target }
+        if target == nil, request.search == nil, shell.blockedReason == nil {
+            fputs("screenshot: no section or module \"\(request.target)\". Use --list.\n", stderr)
+            exit(2)
+        }
+        // Only the shown module's sidebar group is expanded, so the selected row is in
+        // view. The argument domain wins over the persistent one and is never written.
+        var argumentDomain = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        let keep = target?.moduleID
+        argumentDomain["collapsedModules"] = Set(all.compactMap(\.moduleID)).filter { $0 != keep }.sorted().joined(separator: ",")
+        UserDefaults.standard.setVolatileDomain(argumentDomain, forName: UserDefaults.argumentDomain)
+
+        let window = UITestWindow(
+            contentRect: NSRect(x: -30_000, y: -30_000, width: request.size.width, height: request.size.height),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered, defer: false)
+        window.maximumFrameSize = options.screen
+        window.isReleasedWhenClosed = false
+        window.appearance = appearance
+        window.isExcludedFromWindowsMenu = true
+        window.collectionBehavior = [.transient, .ignoresCycle, .stationary]
+        window.toolbarStyle = .unified
+        let hosting = NSHostingView(rootView: shell.makeRootView())
+        window.contentView = hosting
+        self.window = window
+        self.hosting = hosting
+        pump(0.4)
+        window.layoutIfNeeded()
+        // The requested size is the whole window, title bar included.
+        window.setFrame(NSRect(x: -30_000, y: -30_000, width: request.size.width, height: request.size.height), display: true)
+        pump(0.2)
+
+        if shell.blockedReason == nil {
+            shell.privacyMode = request.privacy
+            if let target {
+                if let payload = request.payload, shell.open(section: target.id, payload: payload) {} else { shell.selection = target.id }
+                settle(timeout: request.timeout)
+            }
+            if let query = request.search, shell.hasSearch {
+                shell.searchText = query
+                let deadline = Date().addingTimeInterval(request.timeout)
+                pump(0.6)
+                while Date() < deadline, shell.searchIsRunning { pump(0.1) }
+            }
+        }
+        // Loads that only start once the first ones are on screen (inspectors, static maps).
+        settle(timeout: request.timeout)
+        pump(request.linger)
+        settle(timeout: request.timeout)
+        let spinners = visibleSpinners()
+        if spinners > 0 { fputs("screenshot: \(spinners) progress indicator(s) still visible; capturing anyway\n", stderr) }
+
+        do {
+            try FileManager.default.createDirectory(at: request.out.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard try capture(to: request.out, scale: request.scale) else {
+                fputs("screenshot: could not draw the window\n", stderr)
+                exit(1)
+            }
+        } catch {
+            fputs("screenshot: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+        let frame = window.frame.size
+        print("screenshot: wrote \(request.out.path) (\(Int((frame.width * request.scale).rounded()))x\(Int((frame.height * request.scale).rounded())))")
+        exit(0)
     }
 
     // MARK: Per section
@@ -933,10 +1040,16 @@ public enum UITestRunner {
                 click(at: point)
                 if wait() { return true }
                 if item?.isCollapsed == expectCollapsed {
-                    // The click was taken but the animation never finished.
-                    return false
+                    // The click was taken but the animation never finished. A real
+                    // failure, unless the display fell asleep meanwhile (it stops
+                    // AppKit's animations): then finish without animation, below.
+                    guard displayAsleep else { return false }
+                    method = "clicked the toolbar's sidebar button, but the display went to sleep and the animation did not run; set NSSplitViewItem.isCollapsed directly"
+                    item?.isCollapsed = !expectCollapsed
+                    pump(0.2)
+                } else {
+                    method = "the click on the toolbar's sidebar button had no effect; set NSSplitViewItem.isCollapsed directly"
                 }
-                method = "the click on the toolbar's sidebar button had no effect; set NSSplitViewItem.isCollapsed directly"
             } else {
                 method = "no clickable sidebar button in the toolbar; set NSSplitViewItem.isCollapsed directly"
             }
@@ -1202,27 +1315,33 @@ public enum UITestRunner {
 
     /// Draws the whole window (title bar and toolbar included) into a PNG, in-process.
     private static func capture(named name: String) -> String? {
+        let url = options.outDir.appendingPathComponent(name)
+        do {
+            guard try capture(to: url, scale: 1) else { return nil }
+            return url.path
+        } catch {
+            notes.append("could not write \(name): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// The window frame view drawn into a bitmap of `scale` pixels per point.
+    private static func capture(to url: URL, scale: CGFloat) throws -> Bool {
         window.layoutIfNeeded()
         window.displayIfNeeded()
         let target: NSView = window.contentView?.superview ?? hosting
         let bounds = target.bounds
         guard bounds.width >= 1, bounds.height >= 1,
               let rep = NSBitmapImageRep(
-                bitmapDataPlanes: nil, pixelsWide: Int(bounds.width), pixelsHigh: Int(bounds.height),
+                bitmapDataPlanes: nil, pixelsWide: Int((bounds.width * scale).rounded()), pixelsHigh: Int((bounds.height * scale).rounded()),
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                 colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-        else { return nil }
-        rep.size = bounds.size
+        else { return false }
+        rep.size = bounds.size   // points; the pixel dimensions give the scale factor
         target.cacheDisplay(in: bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
-        let url = options.outDir.appendingPathComponent(name)
-        do {
-            try png.write(to: url, options: .atomic)
-            return url.path
-        } catch {
-            notes.append("could not write \(name): \(error.localizedDescription)")
-            return nil
-        }
+        guard let png = rep.representation(using: .png, properties: [:]) else { return false }
+        try png.write(to: url, options: .atomic)
+        return true
     }
 
     private static func filesEqual(_ a: String, _ b: String) -> Bool {

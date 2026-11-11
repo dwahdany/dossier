@@ -115,20 +115,42 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .labelStyle(SidebarLabelStyle())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: state.hasFullDiskAccess ? "lock.open" : "lock.fill")
                     .foregroundStyle(state.hasFullDiskAccess ? Color.secondary : Color.orange)
-                Text(state.hasFullDiskAccess ? "Read-only · on-device" : "Limited access")
+                Text(state.hasFullDiskAccess ? (Paths.isDemo ? "Read-only" : "Read-only · on-device") : "Limited access")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                DemoBadge()
                 if state.privacyMode {
                     Image(systemName: "eye.slash.fill").foregroundStyle(.secondary).help("Privacy Mode is on")
                 }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
+        }
+    }
+}
+
+/// Sidebar rows: icon in the accent colour, as a sidebar list draws them on screen.
+/// Off-screen captures (`--screenshot`, `--uitest`, `--snapshot app`) draw the window
+/// without the window server, so the sidebar's vibrancy is not composited and the
+/// system-tinted icons come out grey in light mode and nearly black in dark mode; there
+/// the tint is applied explicitly. On screen the system's own style is left alone.
+struct SidebarLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        if SnapshotReadiness.isSnapshotting {
+            Label {
+                configuration.title
+            } icon: {
+                configuration.icon.foregroundStyle(Color.accentColor)
+            }
+        } else {
+            Label(configuration)
         }
     }
 }
@@ -172,7 +194,7 @@ struct SectionStack: View {
     }
 
     private func subtitle(_ id: String) -> String {
-        id == AppState.overviewID ? "What this Mac knows about you" : (state.section(id)?.module.title ?? "")
+        id == AppState.overviewID ? (Paths.isDemo ? "Demo data — an invented person" : "What this Mac knows about you") : (state.section(id)?.module.title ?? "")
     }
 
     @ViewBuilder private func host(_ id: String) -> some View {

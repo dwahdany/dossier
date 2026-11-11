@@ -246,8 +246,7 @@ public enum Format {
         return out
     }
 
-    /// Path with the home directory abbreviated to "~".
-    public static func tildePath(_ url: URL) -> String {
-        (url.path as NSString).abbreviatingWithTildeInPath
-    }
+    /// Path with the home directory abbreviated to "~" (in demo mode relative to the demo
+    /// root, see ``Paths/displayPath(_:)``).
+    public static func tildePath(_ url: URL) -> String { Paths.displayPath(url) }
 }

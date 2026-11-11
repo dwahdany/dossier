@@ -83,6 +83,7 @@ public final class SEGBFile: @unchecked Sendable {
     /// trailer (v2) or the record headers (v1).
     public init(url: URL) throws {
         self.url = url
+        guard Paths.allows(url) else { throw ReadError.unreadable("Outside the demo root") }
         let data: Data
         do {
             data = try Data(contentsOf: url, options: [.alwaysMapped])
@@ -108,7 +109,7 @@ public final class SEGBFile: @unchecked Sendable {
 
     /// Quick check without building an index.
     public static func isSEGB(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        guard Paths.allows(url), let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         let head = (try? handle.read(upToCount: 56)) ?? Data()
         let magic = Data([0x53, 0x45, 0x47, 0x42])

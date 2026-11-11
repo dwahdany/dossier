@@ -53,14 +53,18 @@ struct PlacesView: View {
             let mapped = Text("\(points.count) of \(visible.count) on the map")
                 .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
                 .help("Only places stored with a coordinate can be drawn. Address-only places are listed in the table.")
-            HeaderStrip {
-                // All chips and the count; else scrolling chips and the count while the chips
-                // keep a useful width; else (inspector open in a small window) chips only.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { chipBar; Spacer(minLength: 0); mapped }
-                    HStack(spacing: 12) { chipBar.frame(idealWidth: 300); mapped }
-                    chipBar
+            // All chips and the count on one line where they fit; otherwise the chips wrap
+            // onto a second line instead of being cut off at the edge.
+            ViewThatFits(in: .horizontal) {
+                HeaderStrip { HStack(spacing: 12) { chipBar; Spacer(minLength: 0); mapped } }
+                VStack(alignment: .leading, spacing: 4) {
+                    ChipBar(chips: chips, wraps: true, isOn: chipBar.isOn, toggle: chipBar.toggle)
+                    mapped
                 }
+                .padding(.horizontal, 14).padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
             }
             if data.places.isEmpty {
                 StatePlaceholder(title: "No Places Stored", symbol: "mappin.slash", message: "None of the location-bearing stores hold a place on this Mac.")

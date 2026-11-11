@@ -38,7 +38,7 @@ enum ProfilePaths {
     /// Resource directory of the framework that ships the generic topic assets
     /// (model weights, block lists and the Photos scene → Wikidata map).
     static var portraitAssets: URL {
-        URL(fileURLWithPath: "/System/Library/PrivateFrameworks/PersonalizationPortraitInternals.framework/Versions/A/Resources", isDirectory: true)
+        Paths.system("/System/Library/PrivateFrameworks/PersonalizationPortraitInternals.framework/Versions/A/Resources")
     }
 
     /// Name list of the system's "augmented gazetteer" topic matcher (generic data shipped

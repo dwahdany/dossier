@@ -209,7 +209,10 @@ private struct ClusterMarker: View {
     let valueLabel: (Double) -> String
 
     var body: some View {
-        let size = 16 + 22 * (max(cluster.weight, 0) / maxWeight).squareRoot()
+        // Unweighted points (every weight 1, nothing merged) are plain pins: small, so they
+        // do not cover the map's own labels. Otherwise the area grows with the weight.
+        let plain = maxWeight <= 1 && cluster.points.count <= 1
+        let size = plain ? 13 : 16 + 22 * (max(cluster.weight, 0) / maxWeight).squareRoot()
         ZStack {
             Circle().fill(tint.opacity(selected ? 0.95 : 0.75))
             Circle().strokeBorder(.white.opacity(0.9), lineWidth: selected ? 2.5 : 1)
