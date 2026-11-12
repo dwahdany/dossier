@@ -17,9 +17,6 @@ It is written in Swift and SwiftUI for macOS 15 and later (sidebar, tables, Swif
 MapKit, inspectors, light and dark appearance, no web views), has no third-party
 dependencies, and ships as a universal (Apple silicon + Intel) app.
 
-**Every picture on this page shows generated demo data about an invented person**, not
-anybody's Mac; see [Demo data](#demo-data).
-
 ## Install
 
 <p>
@@ -58,7 +55,7 @@ swift run -c release Dossier           # or start it straight from a terminal
 
 `scripts/make-app.sh` needs no signing identity, no keychain, no sudo and no network.
 [DEVELOPMENT.md](DEVELOPMENT.md) covers the build options, the self-test, the UI test, the
-screenshot harness, demo data, signing and releasing, and the architecture.
+screenshot harness, signing and releasing, and the architecture.
 
 ## Features
 
@@ -205,8 +202,6 @@ Dossier collects nothing and sends no store content anywhere. The details
   Full Disk Access, macOS itself may ask whether Dossier may access data from other
   apps when a section reads inside another app's container; the app warns about this
   before continuing without access.
-- **Demo mode** (below, from version 0.2) points the whole app at a generated data set
-  instead; in that mode the process cannot read the real stores at all.
 
 ## Command line
 
@@ -240,35 +235,8 @@ headless mode. With no arguments it starts the app.
 [ARCHITECTURE.md §3 and §3a](ARCHITECTURE.md#3-build-self-test-snapshot) describe them.
 
 `--summary`, `--search`, `--snapshot`, `--screenshot` and `--uitest` output contains
-personal data unless it was made from demo data. Keep it out of any repository (`*.png`
-and `*.csv` are git-ignored as a safety net; only `docs/images/` is exempt).
-
-## Demo data
-
-To try Dossier, take screenshots or file a bug report without exposing your own data, run
-it on a generated data set. `scripts/make-demo-data.py` writes one: about 160 MB of stores
-in the real formats and layouts, filled with an invented person ("Robin Sample" of
-Wellington, New Zealand), invented family, friends and colleagues, `example.com`
-addresses, phone numbers from the range reserved for fiction, and public landmarks. It
-needs only the Python 3 that ships with the Command Line Tools (standard library, plus
-the system's own compression library for LZFSE where it can be loaded) and never reads a
-real store.
-
-```sh
-/usr/bin/python3 scripts/make-demo-data.py /tmp/dossier-demo
-DOSSIER_DEMO_ROOT=/tmp/dossier-demo swift run -c release Dossier
-```
-
-While `DOSSIER_DEMO_ROOT` is set, every store path resolves below that folder, Full Disk
-Access is not needed, a sandbox profile denies the process access to the real store
-locations, and a "Demo data" marker sits in the sidebar footer. If that sandbox cannot be
-applied, Dossier does not start in demo mode. A demo run keeps its few preferences in a
-defaults domain of its own, apart from the real app's. Dates are generated
-relative to the moment the script runs, so the data always looks current. Maps still
-download Apple map tiles, for the invented places.
-
-All pictures on this page are made this way, by `scripts/make-screenshots.sh`; see
-[DEVELOPMENT.md](DEVELOPMENT.md#screenshots).
+personal data. Keep it out of any repository (`*.png` and `*.csv` are git-ignored as a
+safety net).
 
 ## Known limitations
 
@@ -300,10 +268,6 @@ All pictures on this page are made this way, by `scripts/make-screenshots.sh`; s
   columns of a 100+ column table is slow.
 - Filtering large non-mail Cascade sets decodes every item (with progress), and the
   first address filter in Photos decodes all reverse-geocode archives once.
-- **The demo data is a likeness, not a copy.** It follows the real schemas, but where a
-  field's real values were not known the generators invent them, and its volumes are those
-  of a modest account. A page that looks right on demo data can still meet something
-  unexpected in a real store.
 - The interface is English only; dates and numbers follow the system locale.
 - Builds you make yourself are signed ad hoc and not notarized, and need Full Disk Access
   granted again after each rebuild.
